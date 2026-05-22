@@ -117,11 +117,10 @@ For each command:
   - `runParca.py`: defaults are already minimal (single CPU). Optionally add
     `-c 1` for explicit single-CPU; `--cpus` defaults to 1.
   - `runSim.py`: defaults to `--generations 1`, `--init-sims 1`, and the wild-type
-    variant. To get the shortest possible sim time, add the upstream sim option
-    `--length-sec N` where N is short (default cell-cycle is hours of sim time;
-    upstream supports cutting it short). Confirm exact flag name via
-    `python runscripts/manual/runSim.py -h` inside the built container during
-    Task 4 — the option is defined in `scriptBase.define_sim_options`.
+    variant. To get the shortest possible sim time, use `--length-sec 60` to cap
+    sim time to 60 simulated seconds (default is 3 hours). The flag is defined
+    in `vendor/wcEcoli/wholecell/utils/scriptBase.py:491`
+    (`add_option('length_sec', 'lengthSec', int, …)`).
 
 ## Default output directory
 
@@ -165,14 +164,34 @@ the runtime Dockerfile comments:
   `NO_AVX2=1` when `COMPILE_BLAS=1`. We are NOT compiling OpenBLAS (we use the
   numpy/scipy wheel-bundled copy), so this bug shouldn't bite us — but flag for
   Task 3 testing if results look wrong on a Mac CI runner.
-- **Aesara cache directory:** the upstream wcm-code Dockerfile creates
-  `/.aesara` with `umask 000` so non-root users (and users without a home dir,
-  e.g. `docker run --user $(id -u):$(id -g)`) can write into it. Replicate
-  this in our Dockerfile (`mkdir -p /.aesara && chmod 777 /.aesara`) or set
-  `AESARA_FLAGS=base_compiledir=/tmp/aesara` instead.
+- **Writable cache dirs (`/.aesara` and `/wcEcoli/cache`):** the upstream
+  wcm-code Dockerfile (`cloud/docker/wholecell/Dockerfile:62`) creates BOTH
+  directories world-writable in a single step:
+  `RUN (umask 000 && mkdir -p /.aesara /wcEcoli/cache)`. Rationale:
+  - `/.aesara` is the Aesara compilation cache. Non-root users (and users
+    without a home dir, e.g. `docker run --user $(id -u):$(id -g)`) must be
+    able to write into it at runtime.
+  - `/wcEcoli/cache` is the ParCa output cache. `reconstruction/ecoli/fit_sim_data_1.py:3596`
+    calls `filepath.makedirs(filepath.ROOT_PATH, "cache")` during ParCa, so
+    this directory MUST be world-writable before the run.
+  Replicate the upstream incantation verbatim in our Dockerfile:
+  `RUN (umask 000 && mkdir -p /.aesara /wcEcoli/cache)`. Alternatively, set
+  `AESARA_FLAGS=base_compiledir=/tmp/aesara` to relocate the aesara cache,
+  but `/wcEcoli/cache` still needs to be writable.
 - **`setuptools` version cap:** `requirements.txt` line 51 pins
   `setuptools==73.0.1` because `>=74.0.0` breaks Aesara (distutils removal).
-  Make sure our pip-upgrade step does not blow past this.
+  The safe sequence is to pre-upgrade pip/setuptools/wheel and then install
+  `requirements.txt`, which re-pins setuptools back down. Copy these three
+  lines verbatim into the Dockerfile:
+
+  ```
+  pip install --no-cache-dir --upgrade pip setuptools wheel  # safe because requirements.txt below re-pins setuptools==73.0.1
+  pip install --no-cache-dir numpy==1.26.3
+  pip install --no-cache-dir -r vendor/wcEcoli/requirements.txt
+  ```
+
+  Do NOT run a bare `pip install --upgrade setuptools` after the
+  requirements install — that would push past 74.0.0 and break Aesara.
 - **PYTHONPATH must be set to the repo root.** `runscripts/manual/runParca.py`
   docstring says "Set PYTHONPATH when running this." The upstream wcm-code
   Dockerfile does `ENV PYTHONPATH=/wcEcoli` (line 57). Replicate.
