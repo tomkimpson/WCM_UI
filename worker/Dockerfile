@@ -6,6 +6,8 @@
 # cloud/docker/runtime + cloud/docker/wholecell Dockerfiles. See
 # docs/notes/wcecoli-build-notes.md for justification of every decision.
 
+# NOTE: python:3.11.3-slim resolves to Debian bullseye-slim, which reaches LTS EOL
+# 2026-08-31. After that, apt mirrors may stop serving updates — bump the base then.
 FROM python:3.11.3-slim
 # python:3.11.3-slim resolves to debian:bullseye-slim. Upstream uses bare
 # python:3.11.3 (same Debian release). The -slim variant matches upstream's

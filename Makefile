@@ -6,7 +6,7 @@ help:
 	@echo "Targets:"
 	@echo "  build       Build the worker Docker image"
 	@echo "  test-image  Run image build/import tests"
-	@echo "  clean       Remove local build artefacts"
+	@echo "  clean       Remove local Python/pytest artefacts (does NOT touch Docker images)"
 
 build:
 	docker build -t $(IMAGE_TAG) -f worker/Dockerfile .
