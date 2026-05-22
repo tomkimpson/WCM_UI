@@ -1,0 +1,3 @@
+[submodule "vendor/wcEcoli"]
+	path = vendor/wcEcoli
+	url = https://github.com/CovertLab/wcEcoli.git
