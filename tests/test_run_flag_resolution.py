@@ -44,7 +44,7 @@ def test_main_invokes_subprocess_for_each_command(monkeypatch, tmp_path):
 
     calls = []
 
-    def fake_run(cmd, cwd=None):
+    def fake_run(cmd, cwd=None, **kwargs):
         calls.append((cmd, cwd))
         return MagicMock(returncode=0)
 
@@ -62,7 +62,7 @@ def test_main_returns_nonzero_on_parca_failure(monkeypatch, tmp_path):
     params_file.write_text("{}")
     monkeypatch.setenv("PARAMS_JSON", str(params_file))
 
-    def fake_run(cmd, cwd=None):
+    def fake_run(cmd, cwd=None, **kwargs):
         return MagicMock(returncode=2)
 
     monkeypatch.setattr("worker.run.subprocess.run", fake_run)
@@ -75,7 +75,7 @@ def test_main_accepts_inline_json(monkeypatch):
 
     calls = []
 
-    def fake_run(cmd, cwd=None):
+    def fake_run(cmd, cwd=None, **kwargs):
         calls.append(cmd)
         return MagicMock(returncode=0)
 
@@ -90,7 +90,7 @@ def test_main_handles_params_json_pointing_at_directory(monkeypatch, tmp_path):
     monkeypatch.setenv("PARAMS_JSON", str(tmp_path))
 
     # subprocess should never be called — main() should fail at param load.
-    def fake_run(cmd, cwd=None):
+    def fake_run(cmd, cwd=None, **kwargs):
         raise AssertionError("subprocess.run must not be invoked on param error")
 
     monkeypatch.setattr("worker.run.subprocess.run", fake_run)
