@@ -66,6 +66,11 @@ COPY vendor/wcEcoli/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir numpy==1.26.3 \
     && pip install --no-cache-dir --no-build-isolation -r requirements.txt
 
+# Worker-side helpers. Installed in a separate layer so changes here
+# don't invalidate the wcEcoli requirements layer (which takes ~3 min).
+COPY worker/requirements.txt /tmp/worker-requirements.txt
+RUN pip install --no-cache-dir -r /tmp/worker-requirements.txt
+
 # Copy the pinned wcEcoli source.
 COPY vendor/wcEcoli/ ./
 

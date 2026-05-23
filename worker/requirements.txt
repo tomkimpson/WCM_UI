@@ -1,0 +1,4 @@
+# Worker-side helpers — separate from the vendored wcEcoli requirements.
+# These are installed AFTER vendor/wcEcoli/requirements.txt so we don't
+# disturb the carefully pinned scientific stack.
+jsonschema==4.23.0
