@@ -92,7 +92,7 @@ ENV OPENBLAS_NUM_THREADS=1
 
 # Worker package: schema, merge, validate, run, smoke. Copied together
 # so a change to any of these invalidates one layer, not several.
+# PYTHONPATH=/wcEcoli is already set earlier in this file (line 88).
 COPY worker/ /wcEcoli/worker/
-ENV PYTHONPATH=/wcEcoli
 
 CMD ["python3", "-m", "worker.run"]

@@ -658,8 +658,8 @@ git commit -m "feat(worker): param-driven entrypoint with flag resolution"
 ```dockerfile
 # Worker package: schema, merge, validate, run, smoke. Copied together
 # so a change to any of these invalidates one layer, not several.
+# PYTHONPATH=/wcEcoli is already set earlier in this file (line 88).
 COPY worker/ /wcEcoli/worker/
-ENV PYTHONPATH=/wcEcoli
 ```
 
 (The existing `ENV PYTHONPATH=/wcEcoli` line earlier in the Dockerfile is already correct; just confirm it covers `/wcEcoli/worker/` — it does, because Python walks `PYTHONPATH/worker/__init__.py`.)
