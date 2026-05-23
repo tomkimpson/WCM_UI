@@ -67,4 +67,19 @@ gcloud storage buckets update "gs://${BUCKET}" \
   --project="${PROJECT}" \
   --lifecycle-file="${LIFECYCLE_FILE}"
 
+# -----------------------------------------------------------------------------
+# 3. Firestore (Native mode) default database
+# -----------------------------------------------------------------------------
+# Schemaless. The runs/{run_id} document shape lives in worker/db.py's
+# module docstring — that's the source of truth.
+log "Ensuring Firestore default database (native mode, ${REGION})"
+if ! gcloud firestore databases describe --database='(default)' --project="${PROJECT}" >/dev/null 2>&1; then
+  gcloud firestore databases create \
+    --location="${REGION}" \
+    --type=firestore-native \
+    --project="${PROJECT}"
+else
+  log "  database already exists, leaving in place"
+fi
+
 log "Done."
