@@ -19,7 +19,6 @@ test-image:
 smoke: build
 	pytest tests/test_smoke_sim.py -v
 
-.PHONY: e2e
 e2e: build
 	pytest tests/test_run_with_params.py -v
 
