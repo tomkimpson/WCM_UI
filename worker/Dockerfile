@@ -85,4 +85,8 @@ ENV PYTHONPATH=/wcEcoli
 # slightly different numerical results across runs.
 ENV OPENBLAS_NUM_THREADS=1
 
-CMD ["python3", "-c", "import wholecell; print('wcEcoli importable')"]
+# Smoke entrypoint: runs ParCa + a 60-simulated-second sim. Used by
+# tests/test_smoke_sim.py and CI to verify the image is functional.
+COPY worker/smoke.py /wcEcoli/smoke.py
+
+CMD ["python3", "/wcEcoli/smoke.py"]

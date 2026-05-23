@@ -1,19 +1,5 @@
 import subprocess
-import pytest
 
-IMAGE_TAG = "wcm-ui/worker:test"
-
-@pytest.fixture(scope="session")
-def built_image():
-    """Build the worker image once per test session."""
-    result = subprocess.run(
-        ["docker", "build", "-t", IMAGE_TAG, "-f", "worker/Dockerfile", "."],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        pytest.fail(f"docker build failed:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}")
-    return IMAGE_TAG
 
 def test_image_has_python(built_image):
     result = subprocess.run(
@@ -23,6 +9,7 @@ def test_image_has_python(built_image):
     )
     assert result.returncode == 0, f"python3 --version failed:\n{result.stderr}"
     assert result.stdout.startswith("Python 3."), result.stdout
+
 
 def test_image_has_wcecoli(built_image):
     """wcEcoli is importable AND its Cython extensions compiled.
