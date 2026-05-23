@@ -2,3 +2,4 @@
 # These are installed AFTER vendor/wcEcoli/requirements.txt so we don't
 # disturb the carefully pinned scientific stack.
 jsonschema==4.23.0
+google-cloud-firestore==2.27.0
