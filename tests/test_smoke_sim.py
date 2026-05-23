@@ -23,7 +23,7 @@ def test_smoke_sim_produces_outputs(built_image, tmp_path):
             "docker", "run", "--rm",
             "-v", f"{out_dir}:/wcEcoli/out",
             built_image,
-            "python3", "/wcEcoli/smoke.py",
+            "python3", "-m", "worker.smoke",
         ],
         capture_output=True,
         text=True,

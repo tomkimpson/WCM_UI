@@ -90,8 +90,9 @@ ENV PYTHONPATH=/wcEcoli
 # slightly different numerical results across runs.
 ENV OPENBLAS_NUM_THREADS=1
 
-# Smoke entrypoint: runs ParCa + a 60-simulated-second sim. Used by
-# tests/test_smoke_sim.py and CI to verify the image is functional.
-COPY worker/smoke.py /wcEcoli/smoke.py
+# Worker package: schema, merge, validate, run, smoke. Copied together
+# so a change to any of these invalidates one layer, not several.
+COPY worker/ /wcEcoli/worker/
+ENV PYTHONPATH=/wcEcoli
 
-CMD ["python3", "/wcEcoli/smoke.py"]
+CMD ["python3", "-m", "worker.run"]
