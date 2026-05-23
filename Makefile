@@ -1,12 +1,13 @@
 IMAGE_TAG ?= wcm-ui/worker:dev
 
-.PHONY: help build test-image smoke clean
+.PHONY: help build test-image smoke e2e clean
 
 help:
 	@echo "Targets:"
 	@echo "  build       Build the worker Docker image"
 	@echo "  test-image  Run image build/import tests"
 	@echo "  smoke       Build the image and run the end-to-end smoke simulation (~13 min)"
+	@echo "  e2e         Build the image and run the parametric end-to-end test (~15 min)"
 	@echo "  clean       Remove local Python/pytest artefacts (does NOT touch Docker images)"
 
 build:
@@ -17,6 +18,10 @@ test-image:
 
 smoke: build
 	pytest tests/test_smoke_sim.py -v
+
+.PHONY: e2e
+e2e: build
+	pytest tests/test_run_with_params.py -v
 
 clean:
 	rm -rf out/ __pycache__/ .pytest_cache/
