@@ -65,7 +65,7 @@ def test_valid_submit_creates_queued_doc_and_runs_job(
         "--project", "wcm-ui-dev",
         "--job", "wcm-ui-worker-dev",
         "--region", "us-central1",
-        "--image-uri", "ghcr.io/tomkimpson/wcm-ui-worker:latest",
+        "--image-uri", "us-central1-docker.pkg.dev/wcm-ui-dev/wcm-ui-worker/worker:latest",
     ])
     assert rc == 0
 
@@ -78,7 +78,7 @@ def test_valid_submit_creates_queued_doc_and_runs_job(
     # we want the row to record what the run actually used, for reproducibility.
     assert queued_payload["params_json"]["simulation"]["length_sec"] == 30
     assert queued_payload["params_json"]["simulation"]["seed"] == 0  # default
-    assert queued_payload["image_uri"] == "ghcr.io/tomkimpson/wcm-ui-worker:latest"
+    assert queued_payload["image_uri"] == "us-central1-docker.pkg.dev/wcm-ui-dev/wcm-ui-worker/worker:latest"
     assert "created_at" in queued_payload
 
     # Cloud Run job was invoked with the right name and env overrides.
@@ -92,7 +92,7 @@ def test_valid_submit_creates_queued_doc_and_runs_job(
         for e in request.overrides.container_overrides[0].env
     }
     assert env_overrides["RUN_ID"] == "abc-123"
-    assert env_overrides["IMAGE_URI"] == "ghcr.io/tomkimpson/wcm-ui-worker:latest"
+    assert env_overrides["IMAGE_URI"] == "us-central1-docker.pkg.dev/wcm-ui-dev/wcm-ui-worker/worker:latest"
     # PARAMS_JSON is the resolved (defaulted + validated) JSON, not the raw input.
     assert json.loads(env_overrides["PARAMS_JSON"])["simulation"]["length_sec"] == 30
 

@@ -7,7 +7,7 @@ on:
 
 permissions:
   contents: read
-  packages: write   # required to push to ghcr.io
+  id-token: write   # required for Workload Identity Federation OIDC token
 
 jobs:
   worker:
@@ -44,27 +44,27 @@ jobs:
       - name: Run parametric sim
         run: pytest tests/test_run_with_params.py -v
 
-      # Push to GHCR on main only, never on PRs. We re-tag the already-built
-      # `wcm-ui/worker:test` image rather than rebuilding — saves the full
-      # build cycle. After the first successful push, run once:
-      #
-      #   gh api -X PATCH /user/packages/container/wcm-ui-worker/visibility \
-      #     -f visibility=public
-      #
-      # so Cloud Run Jobs can pull without an imagePullSecret.
-      - name: Log in to GHCR
+      # Push to Artifact Registry on main only (PRs never push). We re-tag
+      # the already-built `wcm-ui/worker:test` image rather than rebuilding.
+      # Auth via Workload Identity Federation — no long-lived JSON keys in
+      # GitHub Secrets. The GCP_WIF_PROVIDER and GCP_CI_SA_EMAIL repo
+      # variables are populated by infra/scripts/up.sh's output.
+      - name: Authenticate to GCP via WIF
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: docker/login-action@v3
+        uses: google-github-actions/auth@v2
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_CI_SA_EMAIL }}
 
-      - name: Tag and push worker image to GHCR
+      - name: Configure docker for Artifact Registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+
+      - name: Tag and push worker image to Artifact Registry
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           set -eu
-          IMAGE=ghcr.io/${{ github.repository_owner }}/wcm-ui-worker
+          IMAGE=us-central1-docker.pkg.dev/wcm-ui-dev/wcm-ui-worker/worker
           docker tag wcm-ui/worker:test "${IMAGE}:latest"
           docker tag wcm-ui/worker:test "${IMAGE}:sha-${{ github.sha }}"
           docker push "${IMAGE}:latest"

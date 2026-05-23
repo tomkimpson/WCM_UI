@@ -33,7 +33,7 @@ from worker.validate import ValidationError, validate_params
 _DEFAULT_PROJECT = "wcm-ui-dev"
 _DEFAULT_REGION = "us-central1"
 _DEFAULT_JOB = "wcm-ui-worker-dev"
-_DEFAULT_IMAGE = "ghcr.io/tomkimpson/wcm-ui-worker:latest"
+_DEFAULT_IMAGE = "us-central1-docker.pkg.dev/wcm-ui-dev/wcm-ui-worker/worker:latest"
 
 _DEFAULTS_PATH = Path(__file__).resolve().parent.parent / "worker" / "schema" / "defaults.json"
 
