@@ -178,20 +178,40 @@ the runtime Dockerfile comments:
   `RUN (umask 000 && mkdir -p /.aesara /wcEcoli/cache)`. Alternatively, set
   `AESARA_FLAGS=base_compiledir=/tmp/aesara` to relocate the aesara cache,
   but `/wcEcoli/cache` still needs to be writable.
-- **`setuptools` version cap:** `requirements.txt` line 51 pins
-  `setuptools==73.0.1` because `>=74.0.0` breaks Aesara (distutils removal).
-  The safe sequence is to pre-upgrade pip/setuptools/wheel and then install
-  `requirements.txt`, which re-pins setuptools back down. Copy these three
-  lines verbatim into the Dockerfile:
+- **`setuptools` version cap and `--no-build-isolation`:**
+  `requirements.txt` line 51 pins `setuptools==73.0.1` because `>=74.0.0`
+  breaks Aesara (distutils removal). But two requirements.txt entries also
+  refuse to build under pip's default isolated build env:
+
+  - `Equation==1.2.1` uses a legacy `ez_setup.py` that fails under modern
+    (`>=74`) setuptools. In an isolated build env pip pulls the latest
+    setuptools, ignoring our pin.
+  - `stochastic-arrow==1.0.0` imports `numpy` in `setup.py`. An isolated
+    build env doesn't see the parent env's `numpy==1.26.3`.
+
+  Working recipe (proven by Task 3, ~4 min wall time on Apple Silicon):
 
   ```
-  pip install --no-cache-dir --upgrade pip setuptools wheel  # safe because requirements.txt below re-pins setuptools==73.0.1
-  pip install --no-cache-dir numpy==1.26.3
-  pip install --no-cache-dir -r vendor/wcEcoli/requirements.txt
+  pip install --no-cache-dir --upgrade pip wheel \
+      && pip install --no-cache-dir 'setuptools==73.0.1'
+  pip install --no-cache-dir numpy==1.26.3 \
+      && pip install --no-cache-dir --no-build-isolation -r vendor/wcEcoli/requirements.txt
   ```
+
+  Pin `setuptools==73.0.1` UP FRONT (not via the requirements.txt re-pin)
+  and pass `--no-build-isolation` so the legacy packages see the parent
+  env's pinned setuptools and pre-installed numpy.
 
   Do NOT run a bare `pip install --upgrade setuptools` after the
   requirements install — that would push past 74.0.0 and break Aesara.
+
+  **Do NOT pin `pip` and `wheel`.** A previous attempt that pinned
+  `pip==24.3.1 wheel==0.45.1` triggered pip's resolver to backtrack
+  endlessly under `--no-build-isolation` (build hung 50+ min, never
+  completed). The unpinned `pip install --upgrade pip wheel` resolves on
+  the first try because pip picks compatible versions itself. If you need
+  reproducible installer-tier versions, vendor pre-built wheels for
+  `Equation` and `stochastic-arrow` instead of pinning pip/wheel.
 - **PYTHONPATH must be set to the repo root.** `runscripts/manual/runParca.py`
   docstring says "Set PYTHONPATH when running this." The upstream wcm-code
   Dockerfile does `ENV PYTHONPATH=/wcEcoli` (line 57). Replicate.
