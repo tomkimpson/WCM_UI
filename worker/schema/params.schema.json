@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WCM_UI run parameters",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "simulation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "length_sec": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400,
+          "default": 60,
+          "description": "Simulated wall time per generation, in seconds."
+        },
+        "seed": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "RNG seed for the first init_sim."
+        },
+        "generations": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8,
+          "default": 1,
+          "description": "Number of cell generations to simulate per seed."
+        },
+        "init_sims": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8,
+          "default": 1,
+          "description": "Number of initial-condition replicates."
+        },
+        "parca_cpus": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16,
+          "default": 1,
+          "description": "CPU count for the parameter-calculator step."
+        }
+      }
+    }
+  }
+}
