@@ -1,6 +1,7 @@
 IMAGE_TAG ?= wcm-ui/worker:dev
+PARAMS    ?= tests/fixtures/length_sec_30.json
 
-.PHONY: help build test-image smoke e2e clean
+.PHONY: help build test-image smoke e2e submit clean
 
 help:
 	@echo "Targets:"
@@ -8,6 +9,7 @@ help:
 	@echo "  test-image  Run image build/import tests"
 	@echo "  smoke       Build the image and run the end-to-end smoke simulation (~13 min)"
 	@echo "  e2e         Build the image and run the parametric end-to-end test (~15 min)"
+	@echo "  submit      Submit a Cloud Run Jobs execution from PARAMS=path/to/params.json"
 	@echo "  clean       Remove local Python/pytest artefacts (does NOT touch Docker images)"
 
 build:
@@ -21,6 +23,9 @@ smoke: build
 
 e2e: build
 	pytest tests/test_run_with_params.py -v
+
+submit:
+	python -m scripts.submit --params $(PARAMS)
 
 clean:
 	rm -rf out/ __pycache__/ .pytest_cache/

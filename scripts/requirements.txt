@@ -1,0 +1,8 @@
+# Host-side helpers for `python -m scripts.submit`. Install separately from
+# the worker container (the worker container does NOT need run_v2 — only
+# the submitter does).
+#
+#     pip install -r scripts/requirements.txt
+#
+google-cloud-firestore==2.27.0
+google-cloud-run==0.16.0
