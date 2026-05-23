@@ -1,0 +1,5 @@
+[tool.pytest.ini_options]
+# Put the repo root on sys.path so `tests/` can `from worker.* import …`.
+# Without this, bare `pytest tests/...` raises ModuleNotFoundError because
+# pytest's rootdir-finding logic alone doesn't extend sys.path.
+pythonpath = ["."]
