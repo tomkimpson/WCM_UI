@@ -36,3 +36,36 @@ def test_schema_declares_simulation_knobs(schema):
     assert expected.issubset(sim_props.keys()), (
         f"missing: {expected - sim_props.keys()}"
     )
+
+
+def test_defaults_file_matches_schema_defaults(schema, defaults):
+    """defaults.json must mirror the inline `default` declared in the schema.
+
+    Catches drift between the two sources of truth (I-1) and, transitively,
+    any knob missing from defaults.json (I-2) — a missing key raises KeyError
+    naming the offender.
+    """
+    sim_props = schema["properties"]["simulation"]["properties"]
+    sim_defaults = defaults["simulation"]
+    for knob, prop in sim_props.items():
+        assert knob in sim_defaults, (
+            f"knob {knob!r} declared in schema but missing from defaults.json"
+        )
+        assert sim_defaults[knob] == prop["default"], (
+            f"default for {knob!r} drifted: "
+            f"schema={prop['default']!r} vs defaults.json={sim_defaults[knob]!r}"
+        )
+
+
+def test_simulation_knobs_have_required_metadata(schema):
+    """Every simulation knob must declare type, default, and description.
+
+    Structural invariant — never needs editing when knobs are added or removed.
+    """
+    sim_props = schema["properties"]["simulation"]["properties"]
+    required_keys = ("type", "default", "description")
+    for knob, prop in sim_props.items():
+        for key in required_keys:
+            assert key in prop, (
+                f"knob {knob!r} is missing required metadata key {key!r}"
+            )
