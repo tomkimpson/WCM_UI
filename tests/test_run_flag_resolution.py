@@ -3,7 +3,7 @@
 Doesn't actually run wcEcoli — patches subprocess.run and inspects the
 recorded calls. The end-to-end smoke (Task 7) verifies the real binding.
 """
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
 from worker.run import resolve, build_commands, main
 
@@ -83,3 +83,15 @@ def test_main_accepts_inline_json(monkeypatch):
     assert main() == 0
     runsim_cmd = calls[1]
     assert runsim_cmd[runsim_cmd.index("--length-sec") + 1] == "45"
+
+
+def test_main_handles_params_json_pointing_at_directory(monkeypatch, tmp_path):
+    """PARAMS_JSON pointing at a directory (not a file) should exit cleanly."""
+    monkeypatch.setenv("PARAMS_JSON", str(tmp_path))
+
+    # subprocess should never be called — main() should fail at param load.
+    def fake_run(cmd, cwd=None):
+        raise AssertionError("subprocess.run must not be invoked on param error")
+
+    monkeypatch.setattr("worker.run.subprocess.run", fake_run)
+    assert main() == 64

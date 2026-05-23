@@ -60,7 +60,7 @@ def main() -> int:
     try:
         user = _load_user_params()
         resolved = resolve(user)
-    except (json.JSONDecodeError, ValidationError, FileNotFoundError) as exc:
+    except (json.JSONDecodeError, ValidationError, OSError) as exc:
         print(f"param error: {exc}", file=sys.stderr, flush=True)
         return 64  # EX_USAGE
 
