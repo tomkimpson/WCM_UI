@@ -27,7 +27,7 @@ def _load_schema() -> dict[str, Any]:
 def validate_params(params: dict[str, Any]) -> None:
     schema = _load_schema()
     validator = jsonschema.Draft202012Validator(schema)
-    errors = sorted(validator.iter_errors(params), key=lambda e: e.absolute_path)
+    errors = sorted(validator.iter_errors(params), key=lambda e: tuple(str(p) for p in e.absolute_path))
     if not errors:
         return
     first = errors[0]

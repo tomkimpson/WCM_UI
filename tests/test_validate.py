@@ -27,3 +27,8 @@ def test_error_includes_jsonpath():
     with pytest.raises(ValidationError) as exc_info:
         validate_params({"simulation": {"seed": -1}})
     assert "seed" in str(exc_info.value)
+
+
+def test_validation_error_is_value_error():
+    """Callers may catch ValueError to unify with json.JSONDecodeError."""
+    assert issubclass(ValidationError, ValueError)
