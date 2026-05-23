@@ -36,3 +36,6 @@ jobs:
 
       - name: Run smoke simulation
         run: pytest tests/test_smoke_sim.py -v
+
+      - name: Run parametric sim
+        run: pytest tests/test_run_with_params.py -v
