@@ -3,3 +3,5 @@
 # disturb the carefully pinned scientific stack.
 jsonschema==4.23.0
 google-cloud-firestore==2.27.0
+google-cloud-storage==3.10.1
+pyarrow==23.0.1
