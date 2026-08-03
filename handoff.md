@@ -1,31 +1,87 @@
-# Handoff — 2026-05-23 19:50
+# Handoff — 2026-08-02 17:30
 
 ## Goal
-Drive the worker image end-to-end from a JSON parameter file: validate, merge with defaults, invoke wcEcoli with resolved CLI flags. Stage 1b of the 7-stage build order in `docs/plans/2026-05-22-wcm-frontend-design.md`.
+Build Stage 3: a FastAPI service with submit/status/results endpoints, hard cost
+ceilings, and a Cloud Run deployment.
 
 ## Status
-**Stage 1b complete.** All 8 plan tasks committed; full host-side suite (23 unit tests in `test_schema`/`test_merge`/`test_validate`/`test_run_flag_resolution`) plus the smoke (~13 min) and parametric (~15 min) e2e tests pass locally. CI green on `ubuntu-latest` in 38m40s (run 26326541567 on `main` at `446d810`). Repo is public at https://github.com/tomkimpson/WCM_UI.
+**Phase 3b (the application) is complete and green. Phase 3a (infrastructure and
+deploy) is not started.** 296 fast tests pass in ~1.3s, plus 4 emulator tests
+that skip. The API boots under uvicorn and serves `/healthz`, `/api/schema` and
+`/api/runs/validate` correctly over real HTTP.
+
+Nothing has been deployed, and **nothing that touches GCP has been executed
+even once** — this machine has neither Docker nor the gcloud SDK, so the phases
+were run in reverse. See `docs/plans/2026-08-02-stage3-api-and-quotas.md`, whose
+"Execution deviation" section records why.
 
 ## What changed this session
 See `log.md`.
 
-## Open questions
-- **Next direction.** Stage 1c (YAML override layer + variant-based knobs — gene knockouts, media composition; requires traversing `vendor/wcEcoli/models/ecoli/sim/variants/`) versus jumping straight to Stage 2 (AWS Batch + S3 wiring). The worker is now parametric-by-env-var, which is the right shape for Batch — so Stage 2 is unblocked. Stage 1c grows the curated knob set toward the design doc's 15–25 target before going cloud-native; Stage 2 ships infrastructure before broadening the surface. No strong technical reason either way.
-- **`/ultrareview` of the Stage 1b branch?** Could pressure-test the 14 commits before moving on. User-initiated only.
-
 ## Blockers / problems
-None.
+- **No Docker runtime and no gcloud SDK on this machine.** Blocks Tasks 3–7
+  entirely: the API image, `up.sh`/`down.sh`, the CI deploy job, `make submit`,
+  and `make quota-emulator`. Stage 1 and 2 were built on a different machine.
+  Note `gcloud auth login` and `gcloud auth application-default login` are
+  interactive, so Tom must run those himself even once the SDK is installed.
 
 ## Next steps
-1. Commit untracked session files (`CLAUDE.md`, `handoff.md`, `log.md`) so they travel with the repo. None are gitignored.
-2. Pick Stage 1c or Stage 2 (see Open questions). Either way: draft a plan in `docs/plans/2026-05-23-stage{1c,2}-*.md` before executing — Stage 1b's 8-task TDD plan worked well as a model.
-3. Address the Node 20 GitHub Actions deprecation before 2026-06-02 — `actions/checkout@v4`, `actions/setup-python@v5`, `docker/setup-buildx-action@v3` need to be bumped to Node-24-compatible majors. Currently a non-blocking annotation on every CI run.
+1. On a machine with Docker and gcloud, pick up **Tasks 3–7** from
+   `docs/plans/2026-08-02-stage3-api-and-quotas.md`. Task 3 has shrunk: it was
+   going to ship a stub app so infra had something to deploy against, but
+   `api/main.py` is now real, so Task 3 is just `api/Dockerfile`, its ignore
+   file, `tests/test_api_image.py`, and the Makefile build targets.
+2. **Do Tasks 4 and 5 before trusting any of the API's GCP calls.** Then run the
+   impersonation check in the plan's Verification section *first* — it is the
+   cheapest way to catch the `run.invoker` trap below.
+3. Run `make quota-emulator` once gcloud exists. It is the only test that proves
+   the quota transaction actually serialises.
+4. Work through `docs/stage3-quota-smoke.md` and fill in its Verified runs table.
+   Step 1 (that `Overrides.timeout` really kills the task at the cap) is the most
+   important, because the quota lease TTL's safety depends on it.
+
+## Open questions
+- **Ceiling values.** Defaults are 8 runs/day globally, 2 concurrent, 3 per IP
+  per day, 45-minute wall clock — all env-configurable, all derived from a cost
+  model in the plan doc (expected ~$5/month, adversarial worst case ~$150). They
+  are deliberately tighter than the design doc's illustrative numbers. Worth a
+  look before going public.
+- **Multi-generation runs.** `generations` and `init_sims` are clamped to 1
+  because `extract_timeseries` handles only one `simOut` directory. Widening the
+  Parquet with a generation column is Stage 1c — but it becomes a *breaking*
+  change once Stage 4 ships plotting against the current four-column schema, so
+  decide before then.
+- **`up.sh` is not yet updated for the quota documents.** It needs the two
+  composite indexes, the `quota_days.expire_at` TTL policy, a conditional
+  `config/global` seed, and a billing budget. All specified in the plan, none
+  written — Task 5.
 
 ## Non-obvious context
-- **Bare `pytest tests/...` requires the `pyproject.toml` rootdir fix** (`pythonpath = ["."]`). Without it, any test importing `worker.*` raises `ModuleNotFoundError` because pytest doesn't extend `sys.path` from the project root when the only `conftest.py` lives under `tests/`. Don't delete `pyproject.toml`.
-- **Keystone proof-point for Stage 1b** is `attrs["lengthSec"] == 30.0` in the Main listener's `attributes.json` after `docker run -e PARAMS_JSON='{"simulation":{"length_sec":30}}'`. wcEcoli writes the exact CLI-passed value into this file — strict equality is the right assertion shape, far stronger than the plan's first-guess "is there a `time` key?".
-- **`jsonschema` sort key must coerce to `tuple(str(p) for p in e.absolute_path)`**. The raw `absolute_path` is a `deque` mixing `str` keys and `int` array indices; sorting raw `deque`s raises `TypeError` once arrays enter the schema (Stage 1c's variant knobs will). Already fixed proactively in `worker/validate.py`.
-- **`worker.run` catches `OSError`, not just `FileNotFoundError`.** Covers the realistic operator mistakes: `PARAMS_JSON` pointing at a directory, a permission-denied file, or a broken symlink. All exit 64 (EX_USAGE) with a `param error: …` prefix.
-- **Image layer ordering keeps iteration cheap.** `COPY worker/ /wcEcoli/worker/` is the last expensive layer — worker-only edits invalidate only the trailing ~74 kB layer, not the ~3-min wcEcoli requirements install above it. Don't reorder.
-- **The 5 Stage 1b knobs are deliberately scalar-only** (`length_sec`, `seed`, `generations`, `init_sims`, `parca_cpus`). Each maps 1:1 onto a `runSim.py` / `runParca.py` CLI flag and was chosen because (a) the effect is observable in a short sim and (b) no wcEcoli internals are touched. Variant-based knobs (gene KOs, media) require deeper work in `vendor/wcEcoli/models/ecoli/sim/variants/` and are explicitly deferred to Stage 1c.
-- **Direct push to `main` is the working model** for this repo (no PR-review gate; single developer). Authorization stands for explicit, scoped pushes — keep asking for novel pushes if context shifts.
+- **Run the tests in the conda env `wcm-ui` (Python 3.11)**, not the miniconda
+  base (3.13). `export PATH=/Users/tomkimpson/miniconda3/envs/wcm-ui/bin:$PATH`
+  then `make test`. numpy is pinned to 1.26.3 to match wcEcoli and has no cp313
+  wheels.
+- **`ContainerOverride` has no `image` field** (verified against
+  google-cloud-run 0.16.0), so the API *cannot* pin an execution to a digest.
+  CI must pin the Job spec with `gcloud run jobs update --image=…@sha256:…`, and
+  the API reads it back. Until CI does that, every run records
+  `image_pin_source="unresolved"` and the reproducibility claim is not yet true.
+  `tests/test_api_cloudrun.py` asserts the field's absence, so it will tell you
+  if this ever becomes possible.
+- **`roles/run.invoker` does not include `run.jobs.runWithOverrides`.** The API
+  passes overrides, so a naive invoker grant fails at submit with a 403 — and
+  only in production, because local dev runs as the operator. The plan specifies
+  a four-permission custom role instead of `roles/run.developer`, which would
+  also let a compromised public API repoint the Job at another image.
+- **Every Docker test invocation needs `-m docker`.** `pyproject.toml` defaults
+  `addopts` to `-m 'not docker'`, so naming a Docker file without it deselects
+  everything and exits 5.
+- **`up.sh` currently un-pins any digest CI sets**, because its Job block
+  unconditionally re-applies `--image`. Task 5 fixes it; don't run `up.sh` after
+  a digest-pinning deploy until then.
+- **Endpoint tests are based on the wall clock, not a fixed instant**, because
+  the routers call `datetime.now(timezone.utc)` directly. Seeding a stale
+  timestamp makes the reconciler correctly declare the run dead — which is how
+  that behaviour got confirmed.
+- A stray `google_cloud_storage-3.13.0-py3-none-any.whl` is untracked at the repo
+  root from an earlier session. Left alone deliberately; delete if it's junk.

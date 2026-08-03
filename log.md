@@ -1,5 +1,136 @@
 # Research log
 
+## 2026-08-02 — Stage 3: the API and quota layer, built before its infrastructure
+
+**Goal.** Build Stage 3 of the build order — a FastAPI service with
+submit/status/results endpoints, hard cost ceilings, and a Cloud Run deployment.
+
+**What was tried.** Started by planning rather than coding, because the design
+doc (`docs/plans/2026-05-22-wcm-frontend-design.md`) is three months old and
+predates the AWS→GCP pivot. Ran three parallel design passes — API surface,
+quota enforcement, infra/CI — then reconciled them into
+`docs/plans/2026-08-02-stage3-api-and-quotas.md` as two phases: 3a for the
+substrate ending in a live URL, 3b for the application.
+
+Phase 3a's ordering rationale was to surface the production-only IAM failures
+early. That collapsed on discovering **this machine has neither Docker nor the
+gcloud SDK** — Stage 1 and 2 were built elsewhere. Since no 3a step could be
+verified here and all of 3b is pure Python against mocked GCP clients, the
+phases were run in reverse. Tasks 1, 2 and 8–20 landed; Tasks 3–7 (image, IAM,
+Cloud Run service, CI graph, deploy smoke) are deferred to a machine with the
+tooling. Recorded in the plan doc so it isn't mistaken for drift.
+
+Two claims in the plan were verified against the installed
+`google-cloud-run==0.16.0` before any code depended on them, because both were
+sourced from documentation rather than the library.
+
+**What was learned.**
+
+- **`Overrides.ContainerOverride` has no `image` field** — its fields are exactly
+  `name`, `args`, `env`, `clear_args`. So the API *cannot* pin an execution to a
+  digest; whatever the Job spec holds is what Cloud Run pulls. Resolving a tag to
+  a digest at submit time would record a guess that races CI's next
+  `docker push :latest`. The flow is inverted instead: CI pins the Job spec, and
+  `api/provenance.resolve_image_pin` reads the digest back off the spec, where it
+  is authoritative by construction. A test now asserts the field's absence so
+  this becomes an enforced pin if the library ever grows it.
+- **`Overrides.timeout` does exist**, is a protobuf `Duration`, and proto-plus
+  accepts a `timedelta`. This matters more than it looks: the quota lease TTL
+  evicts a lease at `cap + grace`, and that eviction is only *safe* — rather than
+  a guess that could reclaim a slot from a live run — because the platform
+  really kills the task at the cap.
+- **Concurrency is not a cost control.** Re-deriving the cost model for Cloud Run
+  Jobs (4 vCPU + 16 GiB = $0.000104/s = $0.3744/job-hour; the measured 26-minute
+  run = $0.162) shows the doc's ceiling of 4 concurrent runs permits ~221
+  runs/day ≈ **$1,093/month**. Concurrency bounds the rate, not the total. A
+  global daily cap was added and is the only ceiling that bounds monthly spend.
+  Per-IP caps don't help — an IPv6 subscriber owns at least a /64.
+- **The doc's "spot only, ~70% savings" doesn't transfer.** Cloud Run Jobs bill
+  per-second at on-demand rates, so the cost basis underwriting the no-login
+  decision was wrong. Worst case with the new ceilings is ~$150/month against an
+  expected ~$5.
+- **Egress was entirely unpriced.** GCS egress is $0.12/GB and the tarball size
+  has never been measured; at ~1 GB, one download costs most of what the run cost
+  to produce, and downloads are repeatable. No compute ceiling touches it.
+  Metering was added at signed-URL mint time.
+- **`fastapi==0.141.1` allows `starlette>=0.46.0` unbounded**, and starlette has
+  since gone 1.x. Release dates settled it: fastapi 0.141.1 shipped 2026-07-29,
+  six weeks *after* starlette 1.3.1, so 1.x is intended — but it is pinned
+  explicitly so a future 2.0 can't arrive on its own. Downstream consequence:
+  starlette 1.x's TestClient wants `httpx2`, so `requirements-dev.txt` uses that
+  instead of `httpx`.
+- **The true fast-test baseline was 39 passing, 1 failing**, not 40 green.
+  `tests/test_postprocess.py` called `.to_pandas()` and pandas was in no
+  manifest — it had only ever passed because Tom's environment happened to have
+  it. The whole point of running the baseline before Task 1 was to find this.
+- **Reconciliation works, demonstrated accidentally.** Two endpoint tests failed
+  because they seeded documents at a hardcoded instant ~18 hours stale, and the
+  reconciler correctly declared those runs dead. The routers read the wall clock,
+  so the fixtures were rebased on it.
+
+**Decisions / dead ends.**
+
+- **Rejected `count()` queries for the quota counters** in favour of a single
+  locked document. Firestore's contention docs never promise range locks, so a
+  phantom insert between a `count()` and its commit is not provably excluded, and
+  aggregation queries read from index entries — the wrong primitive for a
+  spend decision. Side benefit: the quota path needs no composite index.
+- **Rejected an integer concurrency counter** for a map of leases. Release
+  becomes `del leases[run_id]`, so it is idempotent; a *missed* release is
+  visible rather than silently corrupting a counter; and eviction happens lazily
+  inside `reserve()`, so reconciliation needs no cron, query or index.
+- **Deleted `MAX_QUEUED_RUNS` from the design.** `run_job` starts an execution
+  immediately — there is no broker — so a queue would mean Cloud Tasks, a drain
+  endpoint and stranded-claim recovery. It would also *increase* cost risk by
+  turning "reject and the user leaves" into "we owe them 26 minutes later". A
+  429 with `Retry-After` is both cheaper and a more honest UX than a progress
+  page that isn't progressing.
+- **Rejected a wildcard "any wcEcoli key" loose schema.** `build_commands` reads
+  only `resolved["simulation"]`, so accepting `wcecoli.foo` would produce a run
+  that silently discards the override, burns the compute, and records a content
+  hash covering parameters that had no effect. A `SUPPORTED_NAMESPACES` guard
+  rejects it with a message naming what does take effect.
+- **Excluded the git SHAs from the content hash.** The image digest strictly
+  dominates them, so including a SHA that arrives via a build-arg env var could
+  only introduce false *differences* if the var went stale; excluding it can
+  never introduce a false *identity*.
+- **Clamped `generations` and `init_sims` to 1** rather than widening the Parquet
+  now. The schema advertised 8 while `extract_timeseries` has only ever handled
+  one `simOut` directory, so those values burned a full ~26-minute run to
+  manufacture a guaranteed failure. Widening the Parquet (adding a generation
+  column) is Stage 1c, but note it becomes a breaking change once Stage 4 ships
+  plotting against the four-column schema.
+- **Dropped pandas rather than adding it.** `worker/postprocess.py` writes
+  parquet with pyarrow alone, so the test now asserts through `to_pydict()` —
+  removing a host-only dependency instead of adding one to the CI unit job.
+- **Rejected a background reconciler** for lazy reconciliation on the read path.
+  The polling frontend is the only observer, so a scheduler plus a reconciler
+  service would add a deployable and an IAM binding to serve nobody extra.
+
+**Open threads.**
+
+- Tasks 3–7 need a machine with Docker and gcloud. Do Tasks 4 and 5 (IAM, Cloud
+  Run service) before trusting any of the API's GCP calls — `roles/run.invoker`
+  does *not* include `run.jobs.runWithOverrides`, which is the likeliest
+  "tests green, deployed API broken" failure and is invisible locally because dev
+  runs as the operator.
+- The **tarball size** is the largest unknown in the cost model. Measure it on
+  the next successful run; if ~1 GB, excluding the regenerable parca `kb/` output
+  from `make_tarball` is a one-line change worth more than any ceiling.
+- **Where the 26 minutes goes** (provision / image pull / parca / sim /
+  postprocess) is unmeasured. Per-run cost is dominated by a fixed floor that
+  `length_sec` barely moves, so shrinking the 2.52 GB image may beat every
+  ceiling for reducing *expected* cost.
+- **Debian bullseye reaches EOL 2026-08-31**, four weeks out, and
+  `worker/Dockerfile` pins it with a live `apt-get` layer. It will present as an
+  unrelated CI failure. The bullseye pin exists for numerical reproducibility, so
+  bumping to bookworm means re-running both sims and comparing outputs.
+- `/api/runs/validate` computes its content hash over params alone (no image
+  lookup, to stay I/O-free), so it differs from the stored hash. Fine for
+  spotting a duplicate submission; worth revisiting if the UI implies otherwise.
+- A stray `google_cloud_storage-3.13.0-py3-none-any.whl` sits untracked at the
+  repo root from an earlier session. Not deleted without say-so.
+
 ## 2026-05-23 — Stage 1b: parameter injection, end-to-end on Linux
 
 **Goal.** Drive the worker image from a JSON parameter file — validate against a curated schema, merge with defaults, invoke wcEcoli's runscripts with resolved CLI flags — and prove the override actually reaches the sim, both locally and in CI.
