@@ -1,0 +1,44 @@
+# Host-side test and development deps. Nothing here ships in any container.
+#
+#     pip install -r requirements-dev.txt
+#
+# Until Stage 3 the entire host-side install was `pip install pytest`, which is
+# why the fast unit-test files were never run in CI — they need jsonschema,
+# numpy, pyarrow and google-cloud-*. This file is what makes `pytest` green on
+# a bare machine, and what the CI `unit` job installs.
+#
+# `-r` the three container files rather than re-pinning, so a bump in one place
+# cannot drift from another. This requires the shared pins (jsonschema,
+# google-cloud-*) to match across all three — see the note in
+# api/requirements.txt.
+-r api/requirements.txt
+-r worker/requirements.txt
+-r scripts/requirements.txt
+
+pytest==9.1.1
+httpx==0.28.1          # fastapi.testclient.TestClient imports it
+numpy==1.26.3          # tests/test_postprocess.py
+
+# numpy is pinned here rather than in worker/requirements.txt on purpose: the
+# worker gets numpy from vendor/wcEcoli/requirements.txt at exactly 1.26.3, and
+# duplicating it there would create a second place to bump. Matching that pin
+# means the host tests exercise the same numpy the container runs.
+#
+# Do NOT "modernise" numpy: 2.x requires Python >= 3.12, and this project
+# targets 3.11 (worker/Dockerfile, api/Dockerfile, and CI's setup-python all
+# pin 3.11).
+
+# Resolution verified 2026-08-02 on CPython 3.11 via
+#   pip install --dry-run --report … -r requirements-dev.txt
+# Notable transitive versions the resolver picked, recorded so the next reader
+# knows what "worked" meant:
+#   starlette 1.3.1   pinned in api/requirements.txt — see the note there
+#   grpcio    1.83.0   has cp311 manylinux_2_17 wheels for x86_64 and aarch64,
+#                      so the API image build never falls back to compiling it
+#   protobuf  7.35.1
+#   pydantic  2.13.4 / pydantic_core 2.46.4
+#
+# Note there is deliberately no pandas. worker/postprocess.py writes parquet
+# with pyarrow alone, and tests/test_postprocess.py asserts through
+# pq.read_table(...).to_pydict() to match — so the host test env needs no
+# dependency the production code lacks.

@@ -10,6 +10,10 @@ Canonical successful outputs (per docs/notes/wcecoli-build-notes.md):
 """
 import subprocess
 
+import pytest
+
+pytestmark = pytest.mark.docker
+
 
 SIM_TIMEOUT_SEC = 1800  # 30-minute ceiling; tighten once we know real runtime
 

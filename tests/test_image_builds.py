@@ -1,5 +1,9 @@
 import subprocess
 
+import pytest
+
+pytestmark = pytest.mark.docker
+
 
 def test_image_has_python(built_image):
     result = subprocess.run(

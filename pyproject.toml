@@ -3,3 +3,26 @@
 # Without this, bare `pytest tests/...` raises ModuleNotFoundError because
 # pytest's rootdir-finding logic alone doesn't extend sys.path.
 pythonpath = ["."]
+testpaths = ["tests"]
+
+# List form, not a string: pytest shlex-splits string addopts, and quoting
+# `-m 'not docker'` inside a TOML string is a footgun.
+#
+# The default is FAST ONLY. Bare `pytest` must stay a sub-second operation or
+# nobody runs it — before Stage 3 it silently ran ~28 minutes of Docker
+# simulations, which is why the fast files were never wired into CI.
+#
+# Consequence to remember: every Docker invocation must pass `-m docker`
+# explicitly. Without it the marker deselects everything and pytest exits 5
+# (NO_TESTS_COLLECTED) — a loud failure, but only if you know why.
+#
+# --strict-markers turns a typo'd marker APPLIED IN A FILE
+# (`pytestmark = pytest.mark.dokcer`) into a hard collection error. It does not
+# validate marker EXPRESSIONS passed to `-m`; a typo there just deselects
+# everything and exits 5. That is still non-zero, so CI catches it, but it is
+# why the `unit` job also asserts a floor on the collected count.
+addopts = ["-m", "not docker", "--strict-markers", "-ra"]
+
+markers = [
+  "docker: needs a local Docker daemon; builds an image and runs a container (minutes to tens of minutes)",
+]

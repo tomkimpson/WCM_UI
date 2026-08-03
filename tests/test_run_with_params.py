@@ -12,6 +12,10 @@ in that file is the value we sent in.
 import json
 import subprocess
 
+import pytest
+
+pytestmark = pytest.mark.docker
+
 
 SIM_TIMEOUT_SEC = 1800
 LENGTH_SEC_OVERRIDE = 30  # default is 60; pick anything different

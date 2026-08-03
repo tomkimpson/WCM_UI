@@ -1,0 +1,30 @@
+# API service runtime deps. Installed into api/Dockerfile ONLY — the worker
+# container has no HTTP surface and must not carry these.
+#
+# The google-cloud-* and jsonschema pins are held IDENTICAL to
+# worker/requirements.txt and scripts/requirements.txt. That is not cosmetic:
+# requirements-dev.txt does `-r` on all three, so any divergence makes the
+# host-side install unresolvable. If you bump one, bump all three in the same
+# commit.
+#
+# Nothing here compiles — every pin has a cp311 manylinux/macos wheel, which is
+# what keeps the API image build under a minute.
+fastapi==0.141.1
+starlette==1.3.1
+uvicorn[standard]==0.52.1
+pydantic==2.13.4
+PyYAML==6.0.3
+
+# starlette is pinned explicitly even though fastapi already depends on it,
+# because fastapi 0.141.1 declares `starlette>=0.46.0` with NO upper bound and
+# starlette has since gone 1.x. Unpinned, pip silently picks whatever major is
+# current. 1.3.1 is deliberate rather than incidental: fastapi 0.141.1 shipped
+# 2026-07-29, six weeks after starlette 1.3.1 (2026-06-12), so 1.x is the
+# version fastapi was released against. The pin exists to stop a future
+# starlette 2.0 arriving on its own.
+
+# Shared with the worker and submitter — keep in lockstep.
+jsonschema==4.23.0
+google-cloud-firestore==2.27.0
+google-cloud-storage==3.10.1
+google-cloud-run==0.16.0

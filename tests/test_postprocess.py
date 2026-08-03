@@ -75,15 +75,26 @@ def test_extract_timeseries_writes_long_format_parquet(tmp_path, monkeypatch):
     dest = tmp_path / "ts.parquet"
     postprocess.extract_timeseries(out_root, dest, listeners=listener_cols)
 
-    df = pq.read_table(dest).to_pandas()
-    assert set(df.columns) == {"timestep", "listener", "column", "value"}
+    # Read via to_pydict rather than to_pandas: postprocess writes parquet with
+    # pyarrow alone, so asserting through pandas would make the host test env
+    # need a dependency the production code doesn't have.
+    table = pq.read_table(dest).to_pydict()
+    assert set(table) == {"timestep", "listener", "column", "value"}
 
-    cellmass = df[(df["listener"] == "Mass") & (df["column"] == "cellMass")].sort_values("timestep")
-    assert list(cellmass["timestep"]) == [0, 1, 2]
-    assert list(cellmass["value"]) == [10.0, 11.0, 12.0]
+    rows = list(zip(table["timestep"], table["listener"],
+                    table["column"], table["value"]))
 
-    drymass = df[(df["listener"] == "Mass") & (df["column"] == "dryMass")].sort_values("timestep")
-    assert list(drymass["value"]) == [3.0, 3.3, 3.6]
+    def series(listener, column):
+        picked = sorted((t, v) for t, l, c, v in rows
+                        if l == listener and c == column)
+        return [t for t, _ in picked], [v for _, v in picked]
+
+    timesteps, values = series("Mass", "cellMass")
+    assert timesteps == [0, 1, 2]
+    assert values == [10.0, 11.0, 12.0]
+
+    _, drymass = series("Mass", "dryMass")
+    assert drymass == [3.0, 3.3, 3.6]
 
 
 def test_extract_timeseries_raises_on_multiple_simout_dirs(tmp_path, monkeypatch):
