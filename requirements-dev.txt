@@ -16,8 +16,15 @@
 -r scripts/requirements.txt
 
 pytest==9.1.1
-httpx==0.28.1          # fastapi.testclient.TestClient imports it
+httpx2==2.9.1          # what starlette 1.x's TestClient wants
 numpy==1.26.3          # tests/test_postprocess.py
+
+# httpx2, not httpx. starlette 1.x still works with httpx but emits a
+# StarletteDeprecationWarning on every TestClient import telling you to install
+# httpx2 — noise on every CI run, and the deprecated path will eventually go.
+# Verified 2026-08-02 that httpx2 2.9.1 clears the warning and TestClient
+# behaves identically. This is downstream of pinning starlette 1.x; see the
+# note in api/requirements.txt.
 
 # numpy is pinned here rather than in worker/requirements.txt on purpose: the
 # worker gets numpy from vendor/wcEcoli/requirements.txt at exactly 1.26.3, and

@@ -12,7 +12,8 @@ rather than buried in here.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from datetime import datetime as datetime_type, timezone
 from typing import Any, Optional
 
 from google.api_core.exceptions import (
@@ -31,6 +32,10 @@ from worker.validate import FieldErrorData
 #: Bump when the shape of the parameter schema changes, so a stored run records
 #: which contract it was created under.
 SCHEMA_VERSION = 1
+
+
+def _utcnow() -> datetime_type:
+    return datetime_type.now(timezone.utc)
 
 #: Errors that mean Cloud Run definitively did not start anything. Only these
 #: justify refunding the day's quota — see LaunchFailed.
@@ -165,4 +170,123 @@ def submit_run(
         deterministic=provenance.is_deterministic(resolved_params),
         image_uri=image_uri,
         console_url=cloudrun.console_url(target, execution_name),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Response assembly
+# ---------------------------------------------------------------------------
+
+#: Poll cadence by state, mirrored in the router. None once terminal.
+_POLL_MS = {"queued": 5_000, "running": 10_000}
+
+
+def _artifact(available: bool, url: Optional[str] = None,
+              reason: Optional[str] = None, expires_at=None):
+    from api.models import ArtifactInfo
+    return ArtifactInfo(available=available, url=url, reason=reason,
+                        expires_at=expires_at)
+
+
+def build_run_detail(doc: dict[str, Any], settings) -> "Any":
+    """Assemble the poll response from a run document.
+
+    Deliberately performs **no GCS calls**. Availability is derived from the
+    run's state and the URIs already recorded, and tarball expiry is computed
+    from ``finished_at`` plus the retention window. Polling happens every few
+    seconds for the life of a run, so a round trip to GCS per poll would be the
+    dominant cost of the whole service — and would buy nothing the download
+    endpoint doesn't already check authoritatively.
+    """
+    from datetime import timedelta
+
+    from api.models import RunArtifacts, RunDetail, RunProvenance
+
+    run_id = doc["run_id"]
+    state = doc.get("state", "queued")
+    succeeded = state == "succeeded"
+    failed = state == "failed"
+    terminal = succeeded or failed
+
+    started_at = doc.get("started_at")
+    finished_at = doc.get("finished_at")
+    duration = None
+    if isinstance(started_at, datetime_type) and isinstance(finished_at, datetime_type):
+        duration = (finished_at - started_at).total_seconds()
+
+    # The tarball is the only artifact the bucket lifecycle rule deletes, so it
+    # is the only one that can be "expired" rather than simply absent.
+    tarball_expires = None
+    tarball_expired = False
+    if isinstance(finished_at, datetime_type):
+        tarball_expires = finished_at + timedelta(
+            days=settings.tarball_retention_days)
+        tarball_expired = tarball_expires < _utcnow()
+
+    base = f"/api/runs/{run_id}"
+    if succeeded:
+        timeseries = _artifact(True, f"{base}/timeseries.parquet")
+        tarball = (
+            _artifact(False, reason="expired", expires_at=tarball_expires)
+            if tarball_expired
+            else _artifact(True, f"{base}/download/tarball",
+                           expires_at=tarball_expires)
+        )
+    else:
+        reason = "never_produced" if failed else "not_ready"
+        timeseries = _artifact(False, reason=reason)
+        tarball = _artifact(False, reason=reason)
+
+    # params.json is uploaded by the worker at the end of a successful run.
+    params_art = (_artifact(True, f"{base}/download/params") if succeeded
+                  else _artifact(False, reason="not_ready" if not failed
+                                 else "never_produced"))
+    # stderr exists only on failure — and not even then for a validation-time
+    # failure, where nothing ran and there was nothing to capture.
+    stderr_art = (_artifact(True, f"{base}/download/stderr")
+                  if doc.get("gcs_stderr_uri")
+                  else _artifact(False, reason="never_produced"))
+
+    image_uri = doc.get("image_uri")
+    gcs_params_uri = doc.get("gcs_params_uri")
+    provenance_complete = bool(
+        doc.get("image_digest") and doc.get("wcecoli_git_sha")
+        and doc.get("wcm_ui_git_sha")
+    )
+    reproduce = None
+    if image_uri and gcs_params_uri:
+        reproduce = provenance.reproduce_command(
+            image_uri=image_uri, gcs_params_uri=gcs_params_uri)
+
+    return RunDetail(
+        run_id=run_id,
+        state=state,
+        created_at=doc.get("created_at"),
+        started_at=started_at,
+        finished_at=finished_at,
+        duration_sec=duration,
+        params=doc.get("params_json") or {},
+        submitted_params=doc.get("submitted_params_json"),
+        yaml_override=doc.get("yaml_override_text"),
+        error_message=doc.get("error_message"),
+        failure_source=doc.get("failure_source"),
+        attempt=doc.get("attempt"),
+        provenance=RunProvenance(
+            image_uri=image_uri,
+            image_digest=doc.get("image_digest"),
+            image_pin_source=doc.get("image_pin_source"),
+            wcecoli_git_sha=doc.get("wcecoli_git_sha"),
+            wcm_ui_git_sha=doc.get("wcm_ui_git_sha"),
+            content_hash=doc.get("content_hash"),
+            hash_version=doc.get("hash_version"),
+            deterministic=doc.get("deterministic"),
+            complete=provenance_complete,
+            reproduce_command=reproduce,
+        ),
+        artifacts=RunArtifacts(
+            timeseries=timeseries, tarball=tarball,
+            params=params_art, stderr=stderr_art,
+        ),
+        poll_after_ms=None if terminal else _POLL_MS.get(state, 10_000),
+        schema_version=doc.get("schema_version"),
     )
