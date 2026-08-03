@@ -47,6 +47,29 @@ infrastructure claims as intent, not as description.
 6. **Two phases.** 3a builds the substrate and ends with a live URL; 3b builds
    the application. Checkpoint between them.
 
+## Execution deviation, 2026-08-02: phases run out of order
+
+Tasks 1 and 2 landed as written. Tasks 3–7 are **deferred**, and Phase 3b runs
+first, because the machine this session ran on has **neither Docker nor the
+gcloud SDK** installed — Stage 1 and 2 were built elsewhere. That makes every
+Phase 3a verification step impossible here: no image build, no `up.sh` run, no
+deploy, and no `gcloud emulators firestore` for Task 20.
+
+Phase 3b is unaffected — it is pure Python against mocked GCP clients, so every
+task can go genuinely green locally.
+
+The cost is real and worth stating: 3a's ordering existed to surface the
+production-only IAM failures early (`run.jobs.runWithOverrides`, signed-URL
+signing). Those now land later. When picking 3a up on a machine with the
+tooling, do Tasks 4 and 5 before trusting any of the API's GCP calls, and run
+the impersonation check in the Verification section first — it is the cheapest
+way to catch the `run.invoker` trap.
+
+Task 3 also shrinks: it exists to ship a *stub* app so infra could deploy
+against something. After Phase 3b there is a real `api/main.py`, so Task 3
+reduces to the Dockerfile, its ignore file, `tests/test_api_image.py`, and the
+Makefile targets.
+
 ## Corrections to the design doc
 
 These are load-bearing and each changes what gets built.
