@@ -28,10 +28,13 @@ import hmac
 import ipaddress
 import os
 from dataclasses import dataclass
+from datetime import datetime, timedelta as _timedelta, timezone as _timezone
 from functools import lru_cache
 from typing import Optional
 
 from google.cloud import firestore
+
+from worker import db
 
 #: vCPU provisioned on the worker Cloud Run Job (infra/scripts/up.sh). Kept
 #: here so the parca_cpus check and the job shape cannot drift silently.
@@ -284,8 +287,300 @@ def check_compute_budget(resolved_params: dict, ceilings: Ceilings) -> None:
 def _client() -> firestore.Client:
     """Firestore client for the quota documents.
 
-    Shares worker.db's construction so the API and the worker cannot end up
-    pointed at different databases.
+    Delegates to worker.db so the API and the worker cannot end up pointed at
+    different databases — the submitter used to build a bare
+    ``firestore.Client()`` while the worker honoured GCP_PROJECT and
+    FIRESTORE_DATABASE, which is exactly that bug waiting to happen.
     """
-    from worker import db
     return db._client()
+
+
+# ---------------------------------------------------------------------------
+# Admission control
+# ---------------------------------------------------------------------------
+#
+# The concurrency ceiling is a MAP OF LEASES rather than an integer, and a
+# document rather than a count() query. Both choices are deliberate.
+#
+# Why a document, not count(): a single-document transaction takes an exclusive
+# lock on that document, which is exactly the serialization point a
+# mutual-exclusion decision needs. Firestore's contention documentation never
+# promises range locks, so phantom inserts between a count() and its commit are
+# not provably excluded — and aggregation queries are served from index entries,
+# which is the wrong primitive for deciding whether to spend money. A useful
+# side effect: the quota path needs no composite index at all.
+#
+# Why a map, not a counter: releasing is `del leases[run_id]`, so it is
+# idempotent and a double release is harmless. A MISSED release is visible —
+# you can see which run is stuck and for how long — rather than silently
+# corrupting an integer nobody can audit. And reconciliation becomes free:
+# every reserve() first evicts leases past their expiry, so there is no cron,
+# no query and no index.
+#
+# That eviction is only sound because Overrides.timeout makes the platform kill
+# the task at wall_clock_cap_sec. A lease older than cap + grace is therefore
+# provably dead, not probably dead. If the cap ever becomes advisory, this
+# sweep becomes a guess that can evict a live run.
+
+class AtConcurrencyLimit(QuotaError):
+    code = "at_concurrency_limit"
+
+    def __init__(self, message: str, retry_after_sec: Optional[int] = None):
+        super().__init__(message)
+        self.retry_after_sec = retry_after_sec
+
+
+class DailyGlobalLimitReached(QuotaError):
+    code = "daily_limit_reached"
+
+    def __init__(self, message: str, retry_after_sec: Optional[int] = None):
+        super().__init__(message)
+        self.retry_after_sec = retry_after_sec
+
+
+class DailyIpLimitReached(QuotaError):
+    code = "daily_ip_limit_reached"
+
+    def __init__(self, message: str, retry_after_sec: Optional[int] = None):
+        super().__init__(message)
+        self.retry_after_sec = retry_after_sec
+
+
+class NotAcceptingRuns(QuotaError):
+    """The kill switch is on, or we cannot tell whether it is."""
+
+    http_status = 503
+    code = "not_accepting_runs"
+
+
+@dataclass(frozen=True)
+class Lease:
+    """A reserved concurrency slot. Hold it until the run reaches a terminal
+    state, then call finish(); on a failed launch, call release()."""
+
+    run_id: str
+    ip_hash: Optional[str]
+    day_key: str
+    expires_at: "datetime"
+
+
+_INFLIGHT_DOC = "inflight"
+#: Days of retention for the per-day counters. Firestore's TTL deletion lags
+#: expiry by up to 24h, so the honest claim is "<= 8 days", not "exactly 7".
+_QUOTA_DAY_RETENTION_DAYS = 7
+
+#: The IP bucket used when X-Forwarded-For was absent or unparseable. Grouping
+#: them together is deliberate: an unreadable header must not become a way past
+#: the per-IP ceiling.
+_UNKNOWN_IP = "unknown"
+
+
+def day_key_for(now: "datetime") -> str:
+    """The UTC day a run counts against.
+
+    UTC rather than local time so the boundary is fixed and the cap cannot
+    shift under a server timezone change.
+    """
+    return now.astimezone(_timezone.utc).strftime("%Y-%m-%d")
+
+
+def _seconds_until_utc_midnight(now: "datetime") -> int:
+    utc = now.astimezone(_timezone.utc)
+    tomorrow = (utc + _timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    return max(1, int((tomorrow - utc).total_seconds()))
+
+
+def _live_leases(raw: dict, now: "datetime") -> dict:
+    """Drop every lease whose expiry has passed. See the note above on why
+    this is provably safe rather than merely likely."""
+    live = {}
+    for run_id, lease in (raw or {}).items():
+        expires_at = lease.get("expires_at") if isinstance(lease, dict) else None
+        if expires_at is not None and expires_at <= now:
+            continue
+        live[run_id] = lease
+    return live
+
+
+def reserve(run_id: str, *, ip_hash: Optional[str], now: "datetime",
+            ceilings: Ceilings) -> Lease:
+    """Claim a slot against all three ceilings, atomically.
+
+    One transaction over two documents, so two simultaneous submits from the
+    same address contend on the same exclusive lock and exactly one wins.
+
+    Call this BEFORE launching, and release() if the launch fails. Raises a
+    QuotaError subclass; the caller maps `.http_status`, `.code` and
+    `.retry_after_sec` onto the response.
+    """
+    client = _client()
+    day = day_key_for(now)
+    ip_key = ip_hash or _UNKNOWN_IP
+
+    inflight_ref = client.collection(_COLLECTION_QUOTA).document(_INFLIGHT_DOC)
+    day_ref = client.collection(_COLLECTION_QUOTA_DAYS).document(day)
+    expires_at = now + _timedelta(seconds=ceilings.lease_ttl_sec)
+
+    def txn(transaction) -> Lease:
+        inflight = transaction.get(inflight_ref).to_dict() or {}
+        day_doc = transaction.get(day_ref).to_dict() or {}
+
+        leases = _live_leases(inflight.get("leases"), now)
+
+        if len(leases) >= ceilings.max_concurrent_runs:
+            soonest = min(
+                (l["expires_at"] for l in leases.values()
+                 if isinstance(l, dict) and l.get("expires_at")),
+                default=expires_at,
+            )
+            raise AtConcurrencyLimit(
+                f"{len(leases)} runs already in flight (limit "
+                f"{ceilings.max_concurrent_runs})",
+                retry_after_sec=max(1, int((soonest - now).total_seconds())),
+            )
+
+        runs_started = int(day_doc.get("runs_started", 0))
+        if runs_started >= ceilings.max_runs_per_day:
+            raise DailyGlobalLimitReached(
+                f"the service has run its {ceilings.max_runs_per_day} "
+                f"simulations for today",
+                retry_after_sec=_seconds_until_utc_midnight(now),
+            )
+
+        by_ip = dict(day_doc.get("by_ip", {}) or {})
+        if int(by_ip.get(ip_key, 0)) >= ceilings.max_runs_per_ip_per_day:
+            raise DailyIpLimitReached(
+                f"you have run your {ceilings.max_runs_per_ip_per_day} "
+                f"simulations for today",
+                retry_after_sec=_seconds_until_utc_midnight(now),
+            )
+
+        leases[run_id] = {"reserved_at": now, "expires_at": expires_at}
+        by_ip[ip_key] = int(by_ip.get(ip_key, 0)) + 1
+
+        # Write the whole document back. Both are small, and we read them in
+        # this transaction, so a full overwrite cannot lose a concurrent edit.
+        transaction.set(inflight_ref, {"leases": leases})
+        day_doc.update({
+            "runs_started": runs_started + 1,
+            "by_ip": by_ip,
+            "expire_at": now + _timedelta(days=_QUOTA_DAY_RETENTION_DAYS),
+        })
+        transaction.set(day_ref, day_doc)
+
+        return Lease(run_id=run_id, ip_hash=ip_hash, day_key=day,
+                     expires_at=expires_at)
+
+    return db._atomic(client, txn)
+
+
+def release(lease: Lease, *, refund_daily: bool, now: "datetime") -> None:
+    """Give the slot back after a launch that never became a run.
+
+    ``refund_daily=True`` only when the launch PROVABLY did not start —
+    InvalidArgument, PermissionDenied, NotFound, ResourceExhausted. On a
+    DeadlineExceeded the server may well have started the job, so keep the
+    charge: over-charging annoys one user, under-charging is an unbounded bill.
+    """
+    client = _client()
+    inflight_ref = client.collection(_COLLECTION_QUOTA).document(_INFLIGHT_DOC)
+    day_ref = client.collection(_COLLECTION_QUOTA_DAYS).document(lease.day_key)
+    ip_key = lease.ip_hash or _UNKNOWN_IP
+
+    def txn(transaction) -> None:
+        inflight = transaction.get(inflight_ref).to_dict() or {}
+        leases = dict(inflight.get("leases", {}) or {})
+        leases.pop(lease.run_id, None)
+        transaction.set(inflight_ref, {"leases": leases})
+
+        if not refund_daily:
+            return
+
+        day_doc = transaction.get(day_ref).to_dict() or {}
+        by_ip = dict(day_doc.get("by_ip", {}) or {})
+        # max(0, …) so a double refund cannot manufacture free capacity.
+        day_doc["runs_started"] = max(0, int(day_doc.get("runs_started", 0)) - 1)
+        by_ip[ip_key] = max(0, int(by_ip.get(ip_key, 0)) - 1)
+        day_doc["by_ip"] = by_ip
+        transaction.set(day_ref, day_doc)
+
+    db._atomic(client, txn)
+
+
+def finish(run_id: str, *, now: "datetime") -> None:
+    """Free the slot for a run that reached a terminal state.
+
+    Idempotent — it is called from the status read path, which fires on every
+    poll. The daily charge stands: the compute was spent.
+    """
+    client = _client()
+    inflight_ref = client.collection(_COLLECTION_QUOTA).document(_INFLIGHT_DOC)
+
+    def txn(transaction) -> None:
+        inflight = transaction.get(inflight_ref).to_dict() or {}
+        leases = dict(inflight.get("leases", {}) or {})
+        if run_id not in leases:
+            return
+        del leases[run_id]
+        transaction.set(inflight_ref, {"leases": leases})
+
+    db._atomic(client, txn)
+
+
+# ---------------------------------------------------------------------------
+# The kill switch
+# ---------------------------------------------------------------------------
+
+_flag_cache: dict = {}
+
+
+def reset_flag_cache() -> None:
+    """Drop the cached kill-switch value. For tests and for a manual override."""
+    _flag_cache.clear()
+
+
+def accepting_runs(*, now: "datetime", ceilings: Ceilings) -> tuple[bool, str]:
+    """Whether to accept submissions, plus a message for the banner.
+
+    Cached per instance for ``flag_cache_ttl_sec``. The staleness is priced
+    rather than hand-waved: 30 s of overshoot is bounded by
+    ``max_concurrent_runs``, so the worst case is 2 extra runs — about $0.56.
+
+    Failure handling is deliberately asymmetric:
+
+      - A **missing** document means accepting. It is a provisioning gap, not a
+        signal, and failing closed would make a freshly provisioned project
+        refuse every run for no visible reason.
+      - A **read error with no cached value** means refuse, with 503. If
+        Firestore is unreachable then reserve() cannot check the ceilings
+        either, so refusing is both correct and more honest than a 500.
+      - A read error WITH a cached value serves the stale one. This flag changes
+        about once a month; availability beats freshness.
+    """
+    cached = _flag_cache.get("value")
+    cached_at = _flag_cache.get("at")
+    if (cached is not None and cached_at is not None
+            and (now - cached_at).total_seconds() < ceilings.flag_cache_ttl_sec):
+        return cached
+
+    try:
+        client = _client()
+        snapshot = (client.collection(_CONFIG_DOC[0])
+                    .document(_CONFIG_DOC[1]).get())
+        data = snapshot.to_dict() if snapshot.exists else None
+        if data is None:
+            value = (True, "")
+        else:
+            value = (bool(data.get("accepting_runs", True)),
+                     str(data.get("message", "") or ""))
+    except Exception:
+        if cached is not None:
+            return cached
+        raise NotAcceptingRuns(
+            "cannot determine whether the service is accepting runs"
+        )
+
+    _flag_cache["value"] = value
+    _flag_cache["at"] = now
+    return value
