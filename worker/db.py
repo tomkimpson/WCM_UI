@@ -89,8 +89,14 @@ def _client() -> firestore.Client:
     )
 
 
-def _doc(run_id: str):
-    return _client().collection(_COLLECTION).document(run_id)
+def _doc(run_id: str, client=None):
+    """Document ref for a run.
+
+    ``client`` lets a caller inject its own Firestore client — the CLI does, so
+    that its own test seam still controls the writes while the collection name
+    and document shape stay owned by this module.
+    """
+    return (client or _client()).collection(_COLLECTION).document(run_id)
 
 
 def _atomic(client, fn: Callable[[Any], Any]) -> Any:
@@ -214,6 +220,7 @@ def create_queued_run(
     schema_version: Optional[int] = None,
     submitter: Optional[str] = None,
     client_ip_hash: Optional[str] = None,
+    client=None,
 ) -> None:
     """Insert the run document with state='queued'.
 
@@ -250,17 +257,17 @@ def create_queued_run(
     # `is not None` rather than truthiness: deterministic=False and
     # hash_version=0 are meaningful values that must survive.
     payload.update({k: v for k, v in optional.items() if v is not None})
-    _doc(run_id).set(payload)
+    _doc(run_id, client).set(payload)
 
 
-def set_execution(run_id: str, execution_name: str) -> None:
+def set_execution(run_id: str, execution_name: str, client=None) -> None:
     """Record the Cloud Run execution the submitter launched.
 
     Separate from creation because the execution name only exists after
     run_job() returns, and the document has to exist first so the worker —
     which may start within milliseconds — finds something to update.
     """
-    _doc(run_id).update({"execution_name": execution_name})
+    _doc(run_id, client).update({"execution_name": execution_name})
 
 
 # ---------------------------------------------------------------------------

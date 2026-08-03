@@ -111,7 +111,11 @@ def resolve_image_pin(job: Any) -> ImagePin:
     except (AttributeError, IndexError, TypeError):
         return ImagePin(uri="", digest=None, source="unresolved")
 
-    if not image:
+    # Insist on a real string. The proto declares one, but a test double or a
+    # future client change could hand back something else, and letting a
+    # non-string through would poison both the content hash and the EnvVar we
+    # build from it — with a failure far from the cause.
+    if not isinstance(image, str) or not image:
         return ImagePin(uri="", digest=None, source="unresolved")
 
     if "@sha256:" in image:

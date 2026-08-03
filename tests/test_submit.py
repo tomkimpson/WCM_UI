@@ -1,20 +1,27 @@
 """Verify scripts/submit.py wires a params file to a Cloud Run Jobs run.
 
+The CLI is now a thin wrapper over api.runs.submit_run, which the HTTP endpoint
+also calls — so these tests double as a guarantee that the two callers cannot
+drift. What stays the CLI's own job is reading the file, choosing the exit code,
+and printing.
+
 Submit flow:
-    1. Read + validate params JSON  (worker.validate)
+    1. Read the params JSON (merge + validation happen in api.params)
     2. Generate run_id (uuid4)
-    3. Create runs/{run_id} Firestore doc with state='queued'
-    4. Call jobs_client.run_job with env-var overrides
-    5. Update the doc with execution_name
-    6. Print run_id to stdout
+    3. Read the image digest back off the Job spec, for provenance
+    4. Create runs/{run_id} Firestore doc with state='queued'
+    5. Call jobs_client.run_job with env-var overrides and a timeout
+    6. Update the doc with execution_name
+    7. Print run_id, execution and console URL to stdout
 
 Failure modes asserted:
     - Invalid params → exit 64, no Firestore write, no Cloud Run call
-    - Missing params file → exit 64
+    - Missing or malformed params file → exit 64
 """
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -44,6 +51,17 @@ def mocked_clients(monkeypatch):
         "projects/wcm-ui-dev/locations/us-central1/jobs/wcm-ui-worker-dev/executions/exec-xyz"
     )
     jobs_client.run_job.return_value = operation
+
+    # The submit path reads the digest back off the Job spec for provenance
+    # (ContainerOverride has no `image` field, so the API cannot pin one). A
+    # bare MagicMock here would hand a non-string image to the content hash.
+    jobs_client.get_job.return_value = SimpleNamespace(
+        template=SimpleNamespace(template=SimpleNamespace(containers=[
+            SimpleNamespace(
+                image="us-central1-docker.pkg.dev/wcm-ui-dev/wcm-ui-worker"
+                      "/worker@sha256:deadbeef")
+        ]))
+    )
 
     monkeypatch.setattr(submit, "_firestore_client", lambda: firestore_client)
     monkeypatch.setattr(submit, "_jobs_client", lambda: jobs_client)
@@ -78,8 +96,19 @@ def test_valid_submit_creates_queued_doc_and_runs_job(
     # we want the row to record what the run actually used, for reproducibility.
     assert queued_payload["params_json"]["simulation"]["length_sec"] == 30
     assert queued_payload["params_json"]["simulation"]["seed"] == 0  # default
-    assert queued_payload["image_uri"] == "us-central1-docker.pkg.dev/wcm-ui-dev/wcm-ui-worker/worker:latest"
+    # The recorded image is the DIGEST read back off the Job spec, not the
+    # --image-uri flag. That is the point of the read-back: the flag says what
+    # the operator meant, the Job spec says what Cloud Run will actually pull,
+    # and only the latter is reproducible. --image-uri is now a fallback for
+    # when the spec can't be read.
+    assert queued_payload["image_uri"] == (
+        "us-central1-docker.pkg.dev/wcm-ui-dev/wcm-ui-worker/worker@sha256:deadbeef"
+    )
+    assert queued_payload["image_digest"] == "sha256:deadbeef"
+    assert queued_payload["image_pin_source"] == "job_spec_digest"
+    assert queued_payload["submitter"] == "cli"
     assert "created_at" in queued_payload
+    assert "content_hash" in queued_payload
 
     # Cloud Run job was invoked with the right name and env overrides.
     mocked_clients["jobs"].run_job.assert_called_once()
@@ -92,7 +121,9 @@ def test_valid_submit_creates_queued_doc_and_runs_job(
         for e in request.overrides.container_overrides[0].env
     }
     assert env_overrides["RUN_ID"] == "abc-123"
-    assert env_overrides["IMAGE_URI"] == "us-central1-docker.pkg.dev/wcm-ui-dev/wcm-ui-worker/worker:latest"
+    assert env_overrides["IMAGE_URI"] == (
+        "us-central1-docker.pkg.dev/wcm-ui-dev/wcm-ui-worker/worker@sha256:deadbeef"
+    )
     # PARAMS_JSON is the resolved (defaulted + validated) JSON, not the raw input.
     assert json.loads(env_overrides["PARAMS_JSON"])["simulation"]["length_sec"] == 30
 
