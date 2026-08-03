@@ -12,6 +12,10 @@ Document shape (collection ``runs``, document id = ``run_id``):
     gcs_parquet_uri  string                                  (set on mark_succeeded)
     gcs_stderr_uri   string                                  (optional, on mark_failed)
     error_message    string                                  (set on mark_failed)
+    failure_source   string                                  (optional, on mark_failed)
+                     'params' | 'worker' | 'postprocess' | 'infrastructure' —
+                     lets the UI distinguish "your parameters were wrong" from
+                     "the infrastructure died"
 
 The submitter creates the doc with ``state='queued'``. The worker only ever
 calls ``.update()``, so a missing doc raises ``NotFound`` — the right
@@ -54,7 +58,13 @@ def mark_succeeded(run_id: str, gcs_tarball_uri: str, gcs_parquet_uri: str) -> N
     })
 
 
-def mark_failed(run_id: str, error_message: str, gcs_stderr_uri: Optional[str]) -> None:
+def mark_failed(
+    run_id: str,
+    error_message: str,
+    gcs_stderr_uri: Optional[str],
+    *,
+    failure_source: Optional[str] = None,
+) -> None:
     payload = {
         "state": "failed",
         "finished_at": firestore.SERVER_TIMESTAMP,
@@ -62,4 +72,6 @@ def mark_failed(run_id: str, error_message: str, gcs_stderr_uri: Optional[str]) 
     }
     if gcs_stderr_uri:
         payload["gcs_stderr_uri"] = gcs_stderr_uri
+    if failure_source:
+        payload["failure_source"] = failure_source
     _doc(run_id).update(payload)

@@ -24,16 +24,16 @@
         "generations": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 8,
+          "maximum": 1,
           "default": 1,
-          "description": "Number of cell generations to simulate per seed."
+          "description": "Number of cell generations to simulate per seed. Capped at 1 until the Parquet timeseries carries a generation column; more than one generation writes multiple simOut directories, which postprocessing cannot yet represent."
         },
         "init_sims": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 8,
+          "maximum": 1,
           "default": 1,
-          "description": "Number of initial-condition replicates."
+          "description": "Number of initial-condition replicates. Capped at 1 for the same reason as generations: the Parquet schema has no column to distinguish replicates."
         },
         "parca_cpus": {
           "type": "integer",

@@ -115,6 +115,82 @@ def test_cloud_subprocess_failure_uploads_stderr_and_marks_failed(monkeypatch, f
     mocks["upload_run_artifacts"].assert_not_called()
 
 
+@pytest.mark.parametrize("failing_step", ["make_tarball", "extract_timeseries",
+                                          "upload_run_artifacts"])
+def test_postprocess_failure_marks_failed_instead_of_stranding_running(
+    monkeypatch, fake_wcecoli_dir, failing_step,
+):
+    """A postprocess exception must not leave the run stuck in 'running'.
+
+    The sim itself succeeded, so nothing else will ever write to this
+    document — before this was handled, the exception propagated out of
+    main() and the Firestore doc stayed 'running' forever, which also wedges
+    any quota counter derived from that state.
+    """
+    monkeypatch.setenv("RUN_ID", "abc-123")
+    monkeypatch.setenv("RUNS_BUCKET", "wcm-ui-runs-dev")
+    monkeypatch.setenv("PARAMS_JSON", '{"simulation": {"length_sec": 30}}')
+
+    mocks = _mock_cloud_libs(monkeypatch)
+    mocks[failing_step].side_effect = RuntimeError("boom in " + failing_step)
+    monkeypatch.setattr("worker.run.subprocess.run",
+                        MagicMock(return_value=MagicMock(returncode=0)))
+
+    rc = run.main()
+
+    assert rc == 70, "postprocess failure should exit EX_SOFTWARE, not the sim's rc"
+    mocks["mark_running"].assert_called_once_with("abc-123")
+    mocks["mark_succeeded"].assert_not_called()
+    mocks["mark_failed"].assert_called_once()
+    run_id_arg, err_msg, stderr_uri_arg = mocks["mark_failed"].call_args.args
+    assert run_id_arg == "abc-123"
+    assert "postprocess error" in err_msg
+    assert failing_step in err_msg, "the message should name the step that broke"
+    # The sim's own stderr is still worth keeping — it's the only diagnostic.
+    assert stderr_uri_arg == "gs://wcm-ui-runs-dev/abc-123/stderr.log"
+    assert mocks["mark_failed"].call_args.kwargs.get("failure_source") == "postprocess"
+
+
+def test_marking_succeeded_failing_still_records_a_failure(monkeypatch, fake_wcecoli_dir):
+    """The last write can fail too. The top-level net must still catch it."""
+    monkeypatch.setenv("RUN_ID", "abc-123")
+    monkeypatch.setenv("RUNS_BUCKET", "wcm-ui-runs-dev")
+    monkeypatch.setenv("PARAMS_JSON", "{}")
+
+    mocks = _mock_cloud_libs(monkeypatch)
+    mocks["mark_succeeded"].side_effect = RuntimeError("firestore unavailable")
+    monkeypatch.setattr("worker.run.subprocess.run",
+                        MagicMock(return_value=MagicMock(returncode=0)))
+
+    rc = run.main()
+
+    assert rc == 70
+    mocks["mark_failed"].assert_called_once()
+
+
+def test_unexpected_exception_before_the_sim_is_still_recorded(monkeypatch, fake_wcecoli_dir):
+    """Anything escaping _run_cloud must reach a mark_failed, not a traceback.
+
+    mark_running raising stands in for the whole class: a transient Firestore
+    error, a GCS 500, a MemoryError while tarring. None of these can be left
+    to propagate, because the submitter already wrote state='queued'.
+    """
+    monkeypatch.setenv("RUN_ID", "abc-123")
+    monkeypatch.setenv("RUNS_BUCKET", "wcm-ui-runs-dev")
+    monkeypatch.setenv("PARAMS_JSON", "{}")
+
+    mocks = _mock_cloud_libs(monkeypatch)
+    mocks["mark_running"].side_effect = RuntimeError("transient firestore error")
+    monkeypatch.setattr("worker.run.subprocess.run",
+                        MagicMock(return_value=MagicMock(returncode=0)))
+
+    rc = run.main()
+
+    assert rc == 70
+    mocks["mark_failed"].assert_called_once()
+    assert mocks["mark_failed"].call_args.kwargs.get("failure_source") == "worker"
+
+
 def test_param_validation_failure_marks_failed_without_stderr(monkeypatch, fake_wcecoli_dir):
     """Validation fails before subprocess runs, so there's no stderr to upload."""
     monkeypatch.setenv("RUN_ID", "abc-123")

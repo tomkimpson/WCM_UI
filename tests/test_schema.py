@@ -57,6 +57,23 @@ def test_defaults_file_matches_schema_defaults(schema, defaults):
         )
 
 
+def test_multi_generation_knobs_are_clamped_to_one(schema):
+    """`generations` and `init_sims` must not advertise values that always fail.
+
+    postprocess.extract_timeseries raises unless exactly one simOut directory
+    exists, so any run with either knob above 1 validates, burns a full
+    simulation, and then dies in postprocessing. Advertising a maximum of 8 is
+    a lie the schema shouldn't tell. Raise these only together with a
+    per-generation Parquet schema (deferred to Stage 1c).
+    """
+    sim_props = schema["properties"]["simulation"]["properties"]
+    for knob in ("generations", "init_sims"):
+        assert sim_props[knob]["maximum"] == 1, (
+            f"{knob} advertises maximum={sim_props[knob]['maximum']}, but "
+            "extract_timeseries only handles a single simOut directory"
+        )
+
+
 def test_simulation_knobs_have_required_metadata(schema):
     """Every simulation knob must declare type, default, and description.
 
