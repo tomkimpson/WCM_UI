@@ -18,6 +18,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from api import errors, quota
+from api.routers import artifacts as artifacts_router
 from api.routers import meta as meta_router
 from api.routers import runs as runs_router
 from api.settings import Settings, get_settings
@@ -59,6 +60,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(meta_router.router)
     app.include_router(runs_router.router)
+    app.include_router(artifacts_router.router)
 
     return app
 

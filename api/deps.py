@@ -31,9 +31,25 @@ def executions_client():
 
 
 @lru_cache(maxsize=1)
+def signing_credentials():
+    """ADC, scoped for signing V4 URLs.
+
+    Cached and shared with the storage client so a single ``refresh()`` serves
+    both, and so the ``service_account_email`` resolved during that refresh
+    isn't re-fetched from the metadata server on every download.
+    """
+    import google.auth
+    credentials, _project = google.auth.default(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"])
+    return credentials
+
+
+@lru_cache(maxsize=1)
 def storage_client():
     from google.cloud import storage
-    return storage.Client()
+    # Built on the same credentials object that signs, so the two cannot
+    # disagree about which identity is acting.
+    return storage.Client(credentials=signing_credentials())
 
 
 def settings_dep() -> Settings:

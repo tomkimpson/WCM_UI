@@ -584,3 +584,73 @@ def accepting_runs(*, now: "datetime", ceilings: Ceilings) -> tuple[bool, str]:
     _flag_cache["value"] = value
     _flag_cache["at"] = now
     return value
+
+
+# ---------------------------------------------------------------------------
+# Egress
+# ---------------------------------------------------------------------------
+#
+# The design doc prices no egress at all, which leaves the largest per-byte risk
+# in the system unguarded. GCS egress is $0.12/GB and the tarball size has never
+# been measured; if it is ~1 GB then ONE download costs most of what the run
+# cost to produce, and downloads are repeatable and unmetered. Compute ceilings
+# do nothing about it.
+#
+# Bytes are charged at URL-mint time, optimistically and without refund. The URL
+# might be used, and over-charging is the safe direction — the same asymmetry
+# that governs the run refund rule.
+
+class EgressLimitReached(QuotaError):
+    code = "egress_limit_reached"
+
+    def __init__(self, message: str, retry_after_sec: Optional[int] = None):
+        super().__init__(message)
+        self.retry_after_sec = retry_after_sec
+
+
+_GIB = 1024 ** 3
+
+
+def charge_egress(*, size_bytes: int, ip_hash: Optional[str], now: "datetime",
+                  ceilings: Ceilings) -> None:
+    """Count bytes about to leave, refusing once the day's budget is spent.
+
+    Raises EgressLimitReached. The global cap is the one that matters: the
+    per-IP cap alone is meaningless because addresses are free.
+    """
+    client = _client()
+    day = day_key_for(now)
+    ip_key = ip_hash or _UNKNOWN_IP
+    day_ref = client.collection(_COLLECTION_QUOTA_DAYS).document(day)
+
+    global_cap = ceilings.max_egress_gib_per_day * _GIB
+    ip_cap = ceilings.max_egress_gib_per_ip_per_day * _GIB
+
+    def txn(transaction) -> None:
+        doc = transaction.get(day_ref).to_dict() or {}
+        total = int(doc.get("egress_bytes", 0))
+        by_ip = dict(doc.get("egress_by_ip", {}) or {})
+        used_by_ip = int(by_ip.get(ip_key, 0))
+
+        if total + size_bytes > global_cap:
+            raise EgressLimitReached(
+                f"the service has served its "
+                f"{ceilings.max_egress_gib_per_day} GiB of downloads for today",
+                retry_after_sec=_seconds_until_utc_midnight(now),
+            )
+        if used_by_ip + size_bytes > ip_cap:
+            raise EgressLimitReached(
+                f"you have downloaded your "
+                f"{ceilings.max_egress_gib_per_ip_per_day} GiB for today",
+                retry_after_sec=_seconds_until_utc_midnight(now),
+            )
+
+        by_ip[ip_key] = used_by_ip + size_bytes
+        doc.update({
+            "egress_bytes": total + size_bytes,
+            "egress_by_ip": by_ip,
+            "expire_at": now + _timedelta(days=_QUOTA_DAY_RETENTION_DAYS),
+        })
+        transaction.set(day_ref, doc)
+
+    db._atomic(client, txn)
