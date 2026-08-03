@@ -4,6 +4,9 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+# Downloaded wheels. Deps are declared in the requirements files and installed
+# from PyPI; a wheel sitting in the tree is something pip left behind.
+*.whl
 
 # OS
 .DS_Store
