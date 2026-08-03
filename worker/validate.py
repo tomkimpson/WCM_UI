@@ -40,10 +40,18 @@ class FieldErrorData:
 
     path: str          # dotted, for humans: "simulation.length_sec"
     pointer: str       # RFC 6901, for form libraries: "/simulation/length_sec"
-    kind: str          # unknown_field | invalid_type | invalid_value
+    kind: str          # unknown_field | invalid_type | invalid_value | …
     message: str
     keyword: Optional[str] = None   # the jsonschema validator that failed
     constraint: Any = None          # the schema value it failed against
+
+    # Only set for errors that come from parsing text rather than validating a
+    # structure — today that means a YAML syntax error in the override editor.
+    # Declared here rather than in api/ because this dataclass is the single
+    # error carrier both layers pass around, and two optional ints are cheaper
+    # than a parallel type.
+    line: Optional[int] = None
+    column: Optional[int] = None
 
 
 def _load_schema() -> dict[str, Any]:

@@ -86,3 +86,50 @@ def test_simulation_knobs_have_required_metadata(schema):
             assert key in prop, (
                 f"knob {knob!r} is missing required metadata key {key!r}"
             )
+
+
+LOOSE_SCHEMA_PATH = (Path(__file__).parent.parent / "worker" / "schema"
+                     / "params.loose.schema.json")
+
+
+@pytest.fixture(scope="module")
+def loose_schema():
+    return json.loads(LOOSE_SCHEMA_PATH.read_text())
+
+
+def test_loose_schema_is_valid_jsonschema(loose_schema):
+    jsonschema.Draft202012Validator.check_schema(loose_schema)
+
+
+def test_loose_schema_simulation_matches_the_strict_one(schema, loose_schema):
+    """The loose schema duplicates the simulation subschema verbatim.
+
+    A cross-file $ref would need a Registry and a base URI in jsonschema 4.23
+    and buys nothing, so the subschema is copied — which means drift is
+    possible and this test is what catches it. Same guard pattern as
+    defaults.json. If it fails, copy the strict subschema across; do not
+    loosen the assertion.
+    """
+    assert (loose_schema["properties"]["simulation"]
+            == schema["properties"]["simulation"])
+
+
+def test_loose_schema_permits_a_free_form_wcecoli_namespace(loose_schema):
+    """Type-checked but not key-checked — the doc's "any wcEcoli config key"."""
+    jsonschema.validate(
+        instance={"wcecoli": {"anything": {"nested": [1, 2, "three"]}}},
+        schema=loose_schema,
+    )
+
+
+def test_loose_schema_still_rejects_unknown_top_level_namespaces(loose_schema):
+    """"Loose" applies inside `wcecoli`, not at the root."""
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(instance={"galaxy": {}}, schema=loose_schema)
+
+
+def test_loose_schema_still_enforces_simulation_ranges(loose_schema):
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(
+            instance={"simulation": {"length_sec": 999999}}, schema=loose_schema,
+        )

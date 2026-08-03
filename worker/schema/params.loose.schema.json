@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WCM_UI run parameters (override layer)",
+  "description": "Validates the merged result of defaults <- curated form <- YAML override. Identical to params.schema.json for the 'simulation' namespace, plus a free-form 'wcecoli' namespace that is type-checked but not key-checked. The 'simulation' subschema below is a verbatim copy; tests/test_schema.py::test_loose_schema_simulation_matches_the_strict_one fails if the two drift.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "simulation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "length_sec": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400,
+          "default": 60,
+          "description": "Simulated wall time per generation, in seconds."
+        },
+        "seed": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "RNG seed for the first init_sim."
+        },
+        "generations": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1,
+          "default": 1,
+          "description": "Number of cell generations to simulate per seed. Capped at 1 until the Parquet timeseries carries a generation column; more than one generation writes multiple simOut directories, which postprocessing cannot yet represent."
+        },
+        "init_sims": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1,
+          "default": 1,
+          "description": "Number of initial-condition replicates. Capped at 1 for the same reason as generations: the Parquet schema has no column to distinguish replicates."
+        },
+        "parca_cpus": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16,
+          "default": 1,
+          "description": "CPU count for the parameter-calculator step."
+        }
+      }
+    },
+    "wcecoli": {
+      "$ref": "#/$defs/freeFormConfig"
+    }
+  },
+  "$defs": {
+    "freeFormConfig": {
+      "type": "object",
+      "maxProperties": 200,
+      "additionalProperties": {
+        "$ref": "#/$defs/configValue"
+      }
+    },
+    "configValue": {
+      "anyOf": [
+        {
+          "type": [
+            "null",
+            "boolean",
+            "integer",
+            "number",
+            "string"
+          ],
+          "maxLength": 512
+        },
+        {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "$ref": "#/$defs/configValue"
+          }
+        },
+        {
+          "$ref": "#/$defs/freeFormConfig"
+        }
+      ]
+    }
+  }
+}
