@@ -83,5 +83,12 @@ See `log.md`.
   the routers call `datetime.now(timezone.utc)` directly. Seeding a stale
   timestamp makes the reconciler correctly declare the run dead — which is how
   that behaviour got confirmed.
-- A stray `google_cloud_storage-3.13.0-py3-none-any.whl` is untracked at the repo
-  root from an earlier session. Left alone deliberately; delete if it's junk.
+- A stray `google_cloud_storage-3.13.0-py3-none-any.whl` sits at the repo root
+  from an earlier session. `*.whl` is now gitignored so it can't be committed by
+  accident, but **the file is still on disk** — it wasn't deleted, since this
+  session didn't create it. Remove it whenever.
+- **16 commits sit unpushed on `main`.** This repo has no PR gate (single
+  developer, direct-to-main is the recorded working model), so pushing is a
+  deliberate call. Worth noting that until Task 6 lands, CI will only re-run the
+  three Docker suites on these commits — none of the 296 new fast tests are
+  wired into the current workflow.
